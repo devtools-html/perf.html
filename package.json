@@ -9,6 +9,7 @@
     "build-photon": "webpack --config res/photon/webpack.config.js",
     "lint": "run-p lint-js lint-css",
     "lint-js": "eslint *.js bin src --report-unused-disable-directives",
+    "lint-js-a11y": "yarn lint-js -c .eslintrc.a11y.js",
     "lint-fix-js": "yarn lint-js --fix",
     "lint-css": "stylelint \"src/**/*.css\" \"res/**/*.css\"",
     "lint-fix-css": "yarn lint-css --fix",
@@ -105,6 +106,7 @@
     "eslint-plugin-flowtype": "^5.2.0",
     "eslint-plugin-import": "^2.22.1",
     "eslint-plugin-jest": "^24.0.2",
+    "eslint-plugin-jsx-a11y": "^6.3.1",
     "eslint-plugin-prettier": "^3.1.4",
     "eslint-plugin-react": "^7.21.2",
     "fake-indexeddb": "^3.1.2",
@@ -116,6 +118,7 @@
     "html-webpack-plugin": "^4.5.0",
     "husky": "^4.3.0",
     "jest": "^26.4.2",
+    "jest-axe": "^4.0.0",
     "json-loader": "^0.5.7",
     "local-web-server": "^4.2.1",
     "lockfile-lint": "^4.3.7",
@@ -124,6 +127,7 @@
     "postcss-loader": "^4.0.1",
     "prettier": "^1.16.4",
     "raw-loader": "^4.0.1",
+    "react-axe": "^3.5.3",
     "rimraf": "^3.0.2",
     "style-loader": "^1.2.1",
     "stylelint": "^13.7.2",
@@ -153,6 +157,7 @@
       "\\.(css|less)$": "<rootDir>/src/test/fixtures/mocks/style-mock.js"
     },
     "setupFilesAfterEnv": [
+      "jest-axe/extend-expect",
       "./src/test/setup.js"
     ],
     "verbose": false

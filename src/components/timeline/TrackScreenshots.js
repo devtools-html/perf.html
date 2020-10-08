@@ -7,6 +7,7 @@
 import React, { PureComponent } from 'react';
 import explicitConnect from '../../utils/connect';
 import {
+  getZeroAt,
   getCommittedRange,
   getPreviewSelection,
 } from '../../selectors/profile';
@@ -26,6 +27,7 @@ import type {
 import type { ConnectedProps } from '../../utils/connect';
 
 import { ensureExists } from '../../utils/flow';
+import { formatSeconds } from '../../utils/format-numbers';
 import './TrackScreenshots.css';
 
 type OwnProps = {|
@@ -36,6 +38,7 @@ type StateProps = {|
   +thread: Thread,
   +rangeStart: Milliseconds,
   +rangeEnd: Milliseconds,
+  +zeroAt: Milliseconds,
   +screenshots: Marker[],
   +threadName: string,
   +isMakingPreviewSelection: boolean,
@@ -85,6 +88,7 @@ class Screenshots extends PureComponent<Props, State> {
       rangeStart,
       rangeEnd,
       trackHeight,
+      zeroAt,
     } = this.props;
     const { pageX, offsetX, containerTop } = this.state;
     return (
@@ -101,6 +105,7 @@ class Screenshots extends PureComponent<Props, State> {
           rangeEnd={rangeEnd}
           screenshots={screenshots}
           trackHeight={trackHeight}
+          zeroAt={zeroAt}
         />
         <HoverPreview
           screenshots={screenshots}
@@ -113,6 +118,7 @@ class Screenshots extends PureComponent<Props, State> {
           rangeEnd={rangeEnd}
           rangeStart={rangeStart}
           trackHeight={trackHeight}
+          zeroAt={zeroAt}
         />
       </div>
     );
@@ -135,6 +141,7 @@ export default explicitConnect<OwnProps, StateProps, DispatchProps>({
       threadName: selectors.getFriendlyThreadName(state),
       rangeStart: start,
       rangeEnd: end,
+      zeroAt: getZeroAt(state),
       isMakingPreviewSelection:
         previewSelection.hasSelection && previewSelection.isModifying,
       trackHeight: getScreenshotTrackHeight(state),
@@ -147,6 +154,7 @@ type HoverPreviewProps = {|
   +thread: Thread,
   +rangeStart: Milliseconds,
   +rangeEnd: Milliseconds,
+  +zeroAt: Milliseconds,
   +screenshots: Marker[],
   +isMakingPreviewSelection: boolean,
   +offsetX: null | number,
@@ -193,6 +201,7 @@ class HoverPreview extends PureComponent<HoverPreviewProps> {
       offsetX,
       containerTop,
       trackHeight,
+      zeroAt,
     } = this.props;
 
     if (isMakingPreviewSelection || offsetX === null || pageX === null) {
@@ -260,6 +269,10 @@ class HoverPreview extends PureComponent<HoverPreviewProps> {
     // Round left value to integer.
     left = Math.floor(left);
 
+    const alt = `Screenshot recorded at ${formatSeconds(
+      screenshots[screenshotIndex].start - zeroAt
+    )}`;
+
     return createPortal(
       <div className="timelineTrackScreenshotHover" style={{ left, top }}>
         <img
@@ -269,6 +282,7 @@ class HoverPreview extends PureComponent<HoverPreviewProps> {
             height: hoverHeight,
             width: hoverWidth,
           }}
+          alt={alt}
         />
       </div>,
       this._overlayElement
@@ -280,6 +294,7 @@ type ScreenshotStripProps = {|
   +thread: Thread,
   +rangeStart: Milliseconds,
   +rangeEnd: Milliseconds,
+  +zeroAt: Milliseconds,
   +screenshots: Marker[],
   +width: number,
   +trackHeight: number,
@@ -292,6 +307,7 @@ class ScreenshotStrip extends PureComponent<ScreenshotStripProps> {
       width: outerContainerWidth,
       rangeStart,
       rangeEnd,
+      zeroAt,
       screenshots,
       trackHeight,
     } = this.props;
@@ -326,6 +342,9 @@ class ScreenshotStrip extends PureComponent<ScreenshotStripProps> {
         .data: any);
       const { url: urlStringIndex, windowWidth, windowHeight } = payload;
       const scaledImageWidth = (trackHeight * windowWidth) / windowHeight;
+      const alt = `Screenshot recorded at ${formatSeconds(
+        screenshots[screenshotIndex].start - zeroAt
+      )}`;
       images.push(
         <div
           className="timelineTrackScreenshotImgContainer"
@@ -340,6 +359,7 @@ class ScreenshotStrip extends PureComponent<ScreenshotStripProps> {
               width: scaledImageWidth,
               height: trackHeight,
             }}
+            alt={alt}
           />
         </div>
       );

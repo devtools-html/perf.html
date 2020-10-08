@@ -18,7 +18,7 @@ import 'react-splitter-layout/lib/index.css';
 
 // Now import the JS after the CSS.
 import React from 'react';
-import { render } from 'react-dom';
+import ReactDOM, { render } from 'react-dom';
 import Root from './components/app/Root';
 import createStore from './app-logic/create-store';
 import {
@@ -37,6 +37,13 @@ if (process.env.NODE_ENV === 'development') {
   };
 } else if (process.env.NODE_ENV !== 'production') {
   window.ga = () => {};
+}
+
+if (process.env.NODE_ENV !== 'production') {
+  // Have to use require and not static imports here to make sure that
+  // axe is completely removed from the production bundle.
+  const axe = require('react-axe');
+  axe(React, ReactDOM, 1000);
 }
 
 window.geckoProfilerPromise = new Promise(function(resolve) {

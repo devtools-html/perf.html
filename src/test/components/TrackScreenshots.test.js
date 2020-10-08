@@ -12,6 +12,7 @@ import type {
 import * as React from 'react';
 import { Provider } from 'react-redux';
 import { render, fireEvent } from '@testing-library/react';
+import { axe } from 'jest-axe';
 
 import { commitRange } from '../../actions/profile-view';
 import TrackScreenshots from '../../components/timeline/TrackScreenshots';
@@ -148,6 +149,11 @@ describe('timeline/TrackScreenshots', function() {
   it('is not created in the <Timeline /> with a profile with no screenshots', function() {
     const { queryByText } = setup(getProfileWithNiceTracks(), <Timeline />);
     expect(queryByText('Screenshots')).toBeFalsy();
+  });
+
+  it('has no a11y violations', async () => {
+    const { container } = setup();
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
 
