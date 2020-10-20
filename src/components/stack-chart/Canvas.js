@@ -350,13 +350,9 @@ class StackChartCanvasImpl extends React.PureComponent<Props> {
           );
 
           if (searchStringsRegExp && searchStringsRegExp.test(text)) {
-            ctx.save();
-
-            ctx.fillStyle = 'rgba(0, 0, 255, 0.7)';
-
-            ctx.fillRect(intX, intY, intW + BORDER_OPACITY, intH);
-
-            ctx.restore();
+            ctx.strokeStyle = 'green';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(intX, intY, intW + BORDER_OPACITY, intH);
           }
 
           lastDrawnPixelX =
