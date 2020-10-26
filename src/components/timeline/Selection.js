@@ -11,10 +11,12 @@ import {
   getPreviewSelection,
   getCommittedRange,
   getZeroAt,
+  getMouseTimePosition,
 } from 'firefox-profiler/selectors/profile';
 import {
   updatePreviewSelection,
   commitRange,
+  changeMouseTimePosition,
 } from 'firefox-profiler/actions/profile-view';
 import explicitConnect from 'firefox-profiler/utils/connect';
 import classNames from 'classnames';
@@ -44,20 +46,18 @@ type StateProps = {|
   +previewSelection: PreviewSelection,
   +committedRange: StartEndRange,
   +zeroAt: Milliseconds,
+  +mouseTimePosition: Milliseconds | null,
 |};
 
 type DispatchProps = {|
   +commitRange: typeof commitRange,
   +updatePreviewSelection: typeof updatePreviewSelection,
+  +changeMouseTimePosition: typeof changeMouseTimePosition,
 |};
 
 type Props = ConnectedProps<OwnProps, StateProps, DispatchProps>;
 
-type State = {|
-  hoverLocation: null | CssPixels,
-|};
-
-class TimelineRulerAndSelection extends React.PureComponent<Props, State> {
+class TimelineRulerAndSelection extends React.PureComponent<Props> {
   _handlers: ?{
     mouseMoveHandler: MouseHandler,
     mouseUpHandler: MouseHandler,
@@ -67,10 +67,6 @@ class TimelineRulerAndSelection extends React.PureComponent<Props, State> {
   _rangeStartOnMove: OnMove;
   _moveRangeOnMove: OnMove;
   _rangeEndOnMove: OnMove;
-
-  state = {
-    hoverLocation: null,
-  };
 
   _containerCreated = (element: HTMLElement | null) => {
     this._container = element;
@@ -213,6 +209,7 @@ class TimelineRulerAndSelection extends React.PureComponent<Props, State> {
     if (!this._container) {
       return;
     }
+    const { width, committedRange, changeMouseTimePosition } = this.props;
 
     const rect = getContentRect(this._container);
     if (
@@ -221,9 +218,15 @@ class TimelineRulerAndSelection extends React.PureComponent<Props, State> {
       event.pageY < rect.top ||
       event.pageY >= rect.bottom
     ) {
-      this.setState({ hoverLocation: null });
+      changeMouseTimePosition(null);
     } else {
-      this.setState({ hoverLocation: event.pageX - rect.left });
+      const hoverPositionInPixels = event.pageX - rect.left;
+      const pixelsToMouseTimePosition = Math.round(
+        ((committedRange.end - committedRange.start) * hoverPositionInPixels) /
+          width +
+          committedRange.start
+      );
+      changeMouseTimePosition(pixelsToMouseTimePosition);
     }
   };
 
@@ -351,8 +354,23 @@ class TimelineRulerAndSelection extends React.PureComponent<Props, State> {
   }
 
   render() {
-    const { children, previewSelection, className } = this.props;
-    const { hoverLocation } = this.state;
+    const {
+      children,
+      previewSelection,
+      className,
+      mouseTimePosition,
+      width,
+      committedRange,
+    } = this.props;
+
+    let hoverLocation = null;
+
+    if (mouseTimePosition !== null) {
+      // If the mouseTimePosition exists, convert it to CssPixels.
+      hoverLocation =
+        (width * (mouseTimePosition - committedRange.start)) /
+        (committedRange.end - committedRange.start);
+    }
 
     return (
       <div
@@ -385,10 +403,12 @@ export default explicitConnect<OwnProps, StateProps, DispatchProps>({
     previewSelection: getPreviewSelection(state),
     committedRange: getCommittedRange(state),
     zeroAt: getZeroAt(state),
+    mouseTimePosition: getMouseTimePosition(state),
   }),
   mapDispatchToProps: {
     updatePreviewSelection,
     commitRange,
+    changeMouseTimePosition,
   },
   component: TimelineRulerAndSelection,
 });
