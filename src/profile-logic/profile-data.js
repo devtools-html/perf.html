@@ -2609,15 +2609,23 @@ export function extractProfileFilterPageData(
     return null;
   }
 
-  // Getting the first page's innerWindowID and then getting its url.
-  const innerWindowID = [...relevantPages][0];
-  const filteredPages = pages.filter(
-    page => page.innerWindowID === innerWindowID
+  // Getting the pages that are relevant and a topmost frame.
+  let filteredPages = pages.filter(
+    page =>
+      relevantPages.has(page.innerWindowID) && page.embedderInnerWindowID === 0
   );
 
-  if (filteredPages.length !== 1) {
-    // There should be only one page with the given innerWindowID, they are unique.
-    console.error(`Expected one page but ${filteredPages.length} found.`);
+  if (filteredPages.length > 1) {
+    // If there are more than one topmost page, it's also good to filter out the
+    // `about:` pages so user can see their url they are actually profiling.
+    filteredPages = [
+      filteredPages.filter(page => !page.url.startsWith('about:'))[0],
+    ];
+  }
+
+  if (filteredPages.length === 0) {
+    // There should be at least one relevant page.
+    console.error(`Expected a relevant page but couldn't find it.`);
     return null;
   }
 
