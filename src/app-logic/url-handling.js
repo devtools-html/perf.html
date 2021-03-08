@@ -36,7 +36,7 @@ import type {
   TransformStacksPerThread,
 } from 'firefox-profiler/types';
 
-export const CURRENT_URL_VERSION = 5;
+export const CURRENT_URL_VERSION = 6;
 
 /**
  * This static piece of state might look like an anti-pattern, but it's a relatively
@@ -796,6 +796,80 @@ const _upgraders = {
     // implementation filter, so they also include 'relevantForJS' label frames in their
     // callNodePaths. For example,  in a call stack like this: 'C++->JS->relevantForJS->JS'
     // Previous callNodePath was 'JS,JS'. But now it has to be 'JS,relevantForJS,JS'.
+
+    /**
+     * This function returns the stack index of the first occurrence of the given
+     * CallNodePath. Assumes the implementation filter of CallNodePath is 'js'.
+     * Typically this operation would use a call node index rather than a stack.
+     */
+    function getStackIndexFromVersion3JSCallNodePath(
+      thread: Thread,
+      oldCallNodePath: CallNodePath
+    ): IndexIntoStackTable | null {
+      const { stackTable, funcTable, frameTable } = thread;
+      const stackIndexDepth: Map<
+        IndexIntoStackTable | null,
+        number
+      > = new Map();
+      stackIndexDepth.set(null, -1);
+
+      for (let stackIndex = 0; stackIndex < stackTable.length; stackIndex++) {
+        const prefix = stackTable.prefix[stackIndex];
+        const frameIndex = stackTable.frame[stackIndex];
+        const funcIndex = frameTable.func[frameIndex];
+        const isJS = funcTable.isJS[funcIndex];
+        // We know that at this point stack table is sorted and the following
+        // condition holds:
+        // assert(prefixStack === null || prefixStack < stackIndex);
+        const doesPrefixMatchCallNodePath =
+          prefix === null || stackIndexDepth.has(prefix);
+
+        if (!doesPrefixMatchCallNodePath) {
+          continue;
+        }
+        const prefixStackDepth = ensureExists(
+          stackIndexDepth.get(prefix),
+          'Unable to find the stack depth for a prefix'
+        );
+        const depth = prefixStackDepth + 1;
+
+        if (isJS && oldCallNodePath[depth] === funcIndex) {
+          // This is a JS frame, and it matches the CallNodePath.
+          if (depth === oldCallNodePath.length - 1) {
+            // This is the stack index that we are looking for.
+            return stackIndex;
+          }
+          stackIndexDepth.set(stackIndex, depth);
+        } else {
+          // Any non-JS stack potentially matches, because they're skipped in the JS
+          // call node path. Add it here using the previous depth.
+          stackIndexDepth.set(stackIndex, prefixStackDepth);
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Constructs the new JS CallNodePath from given stackIndex and returns it.
+     */
+    function getVersion4JSCallNodePathFromStackIndex(
+      thread: Thread,
+      stackIndex: IndexIntoStackTable
+    ): CallNodePath {
+      const { funcTable, stackTable, frameTable } = thread;
+      const callNodePath = [];
+      let nextStackIndex = stackIndex;
+      while (nextStackIndex !== null) {
+        const frameIndex = stackTable.frame[nextStackIndex];
+        const funcIndex = frameTable.func[frameIndex];
+        if (funcTable.isJS[funcIndex] || funcTable.relevantForJS[funcIndex]) {
+          callNodePath.unshift(funcIndex);
+        }
+        nextStackIndex = stackTable.prefix[nextStackIndex];
+      }
+      return callNodePath;
+    }
+
     const query = processedLocation.query;
     const selectedThread: null | number =
       query.thread === undefined ? null : +query.thread;
@@ -888,6 +962,155 @@ const _upgraders = {
       .filter(Boolean)
       .join('~');
   },
+  [6]: (
+    processedLocation: ProcessedLocationBeforeUpgrade,
+    profile: Profile
+  ) => {
+    // 'js' implementation filter has been changed to include all label frames. See
+    // upgrader 4 for more information, as this is a very similar upgrade.
+
+    const idleCategoryIndex = profile.meta.categories.findIndex(
+      category => category.name === 'Idle'
+    );
+    const otherCategoryIndex = profile.meta.categories.findIndex(
+      category => category.name === 'Other'
+    );
+
+    /**
+     * This function returns the stack index of the first occurrence of the given
+     * CallNodePath. Assumes the implementation filter of CallNodePath is 'js'.
+     */
+    function getStackIndexFromVersion5JSCallNodePath(
+      thread: Thread,
+      oldCallNodePath: CallNodePath
+    ): IndexIntoStackTable | null {
+      const { stackTable, funcTable, frameTable } = thread;
+      const stackIndexDepth: Map<
+        IndexIntoStackTable | null,
+        number
+      > = new Map();
+      stackIndexDepth.set(null, -1);
+
+      for (let stackIndex = 0; stackIndex < stackTable.length; stackIndex++) {
+        const prefix = stackTable.prefix[stackIndex];
+        const frameIndex = stackTable.frame[stackIndex];
+        const funcIndex = frameTable.func[frameIndex];
+        const isJS = funcTable.isJS[funcIndex];
+        const relevantForJS = funcTable.relevantForJS[funcIndex];
+
+        // We know that at this point stack table is sorted and the following
+        // condition holds:
+        // assert(prefixStack === null || prefixStack < stackIndex);
+        const doesPrefixMatchCallNodePath =
+          prefix === null || stackIndexDepth.has(prefix);
+
+        if (!doesPrefixMatchCallNodePath) {
+          continue;
+        }
+        const prefixStackDepth = ensureExists(
+          stackIndexDepth.get(prefix),
+          'Unable to find the stack depth for a prefix'
+        );
+        const depth = prefixStackDepth + 1;
+
+        if (isJS && relevantForJS && oldCallNodePath[depth] === funcIndex) {
+          // This is a JS frame, and it matches the CallNodePath.
+          if (depth === oldCallNodePath.length - 1) {
+            // This is the stack index that we are looking for.
+            return stackIndex;
+          }
+          stackIndexDepth.set(stackIndex, depth);
+        } else {
+          // Any non-JS stack potentially matches, because they're skipped in the JS
+          // call node path. Add it here using the previous depth.
+          stackIndexDepth.set(stackIndex, prefixStackDepth);
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Constructs the new JS CallNodePath from given stackIndex and returns it.
+     * This should only be used for the URL upgrader.
+     */
+    function getVersion6JSCallNodePathFromStackIndex(
+      thread: Thread,
+      stackIndex: IndexIntoStackTable
+    ): CallNodePath {
+      const { funcTable, stackTable, frameTable } = thread;
+      const callNodePath = [];
+      let nextStackIndex = stackIndex;
+      while (nextStackIndex !== null) {
+        const frameIndex = stackTable.frame[nextStackIndex];
+        const funcIndex = frameTable.func[frameIndex];
+        if (
+          funcTable.isJS[funcIndex] ||
+          funcTable.relevantForJS[funcIndex] ||
+          (frameTable.category[frameIndex] !== null &&
+            frameTable.category[frameIndex] !== idleCategoryIndex &&
+            frameTable.category[frameIndex] !== otherCategoryIndex)
+        ) {
+          callNodePath.unshift(funcIndex);
+        }
+        nextStackIndex = stackTable.prefix[nextStackIndex];
+      }
+      return callNodePath;
+    }
+
+    const query = processedLocation.query;
+    const selectedThread: null | number =
+      query.thread === undefined ? null : +query.thread;
+
+    if (selectedThread === null || profile === undefined) {
+      return;
+    }
+
+    const transformStacksPerThread: TransformStacksPerThread = query.transforms
+      ? parseTransforms([selectedThread], query.transforms)
+      : {};
+
+    // At the time this upgrader was written, there was only one selected thread.
+    // Only upgrade the single transfrom.
+    const transforms = transformStacksPerThread[selectedThread];
+
+    if (!transforms || transforms.length === 0) {
+      // We don't have any transforms to upgrade.
+      return;
+    }
+
+    const thread = profile.threads[selectedThread];
+    for (let i = 0; i < transforms.length; i++) {
+      const transform = transforms[i];
+      if (
+        !transform.implementation ||
+        transform.implementation !== 'js' ||
+        !transform.callNodePath
+      ) {
+        // Only transforms with JS implementation filters that have callNodePaths
+        // need to be upgraded.
+        continue;
+      }
+
+      const callNodeStackIndex = getStackIndexFromVersion5JSCallNodePath(
+        thread,
+        transform.callNodePath
+      );
+      if (callNodeStackIndex === null) {
+        // If we can't find the stack index of given call node path, just abort.
+        continue;
+      }
+      // This property is not writable, make it an "any"
+      (transform: any).callNodePath = getVersion6JSCallNodePathFromStackIndex(
+        thread,
+        callNodeStackIndex
+      );
+    }
+
+    processedLocation.query.transforms = stringifyTransforms(
+      new Set([selectedThread]),
+      transformStacksPerThread
+    );
+  },
 };
 
 if (Object.keys(_upgraders).length - 1 !== CURRENT_URL_VERSION) {
@@ -895,74 +1118,6 @@ if (Object.keys(_upgraders).length - 1 !== CURRENT_URL_VERSION) {
     CURRENT_URL_VERSION does not match the number of URL upgraders. If you added a
     new upgrader, make sure and bump the CURRENT_URL_VERSION variable.
   `);
-}
-
-// This function returns the stack index of the first occurrence of the given
-// CallNodePath. Assumes the implementation filter of CallNodePath is 'js'.
-// This should only be used for the URL upgrader, typically this
-// operation would use a call node index rather than a stack.
-function getStackIndexFromVersion3JSCallNodePath(
-  thread: Thread,
-  oldCallNodePath: CallNodePath
-): IndexIntoStackTable | null {
-  const { stackTable, funcTable, frameTable } = thread;
-  const stackIndexDepth: Map<IndexIntoStackTable | null, number> = new Map();
-  stackIndexDepth.set(null, -1);
-
-  for (let stackIndex = 0; stackIndex < stackTable.length; stackIndex++) {
-    const prefix = stackTable.prefix[stackIndex];
-    const frameIndex = stackTable.frame[stackIndex];
-    const funcIndex = frameTable.func[frameIndex];
-    const isJS = funcTable.isJS[funcIndex];
-    // We know that at this point stack table is sorted and the following
-    // condition holds:
-    // assert(prefixStack === null || prefixStack < stackIndex);
-    const doesPrefixMatchCallNodePath =
-      prefix === null || stackIndexDepth.has(prefix);
-
-    if (!doesPrefixMatchCallNodePath) {
-      continue;
-    }
-    const prefixStackDepth = ensureExists(
-      stackIndexDepth.get(prefix),
-      'Unable to find the stack depth for a prefix'
-    );
-    const depth = prefixStackDepth + 1;
-
-    if (isJS && oldCallNodePath[depth] === funcIndex) {
-      // This is a JS frame, and it matches the CallNodePath.
-      if (depth === oldCallNodePath.length - 1) {
-        // This is the stack index that we are looking for.
-        return stackIndex;
-      }
-      stackIndexDepth.set(stackIndex, depth);
-    } else {
-      // Any non-JS stack potentially matches, because they're skipped in the JS
-      // call node path. Add it here using the previous depth.
-      stackIndexDepth.set(stackIndex, prefixStackDepth);
-    }
-  }
-  return null;
-}
-
-// Constructs the new JS CallNodePath from given stackIndex and returns it.
-// This should only be used for the URL upgrader.
-function getVersion4JSCallNodePathFromStackIndex(
-  thread: Thread,
-  stackIndex: IndexIntoStackTable
-): CallNodePath {
-  const { funcTable, stackTable, frameTable } = thread;
-  const callNodePath = [];
-  let nextStackIndex = stackIndex;
-  while (nextStackIndex !== null) {
-    const frameIndex = stackTable.frame[nextStackIndex];
-    const funcIndex = frameTable.func[frameIndex];
-    if (funcTable.isJS[funcIndex] || funcTable.relevantForJS[funcIndex]) {
-      callNodePath.unshift(funcIndex);
-    }
-    nextStackIndex = stackTable.prefix[nextStackIndex];
-  }
-  return callNodePath;
 }
 
 function validateTimelineTrackOrganization(

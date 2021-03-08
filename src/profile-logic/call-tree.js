@@ -28,6 +28,7 @@ import type {
   Milliseconds,
   TracedTiming,
   SamplesTable,
+  ImplementationFilter,
 } from 'firefox-profiler/types';
 
 import ExtensionIcon from '../../res/img/svg/extension.svg';
@@ -79,10 +80,10 @@ export class CallTree {
   // _children is indexed by IndexIntoCallNodeTable. Since they are
   // integers, using an array directly is faster than going through a Map.
   _children: Array<CallNodeChildren>;
-  _jsOnly: boolean;
   _interval: number;
   _isHighPrecision: boolean;
   _weightType: WeightType;
+  _implementationFilter: ImplementationFilter;
 
   constructor(
     { funcTable, resourceTable, stringTable }: Thread,
@@ -92,10 +93,10 @@ export class CallTree {
     callNodeChildCount: Uint32Array,
     rootTotalSummary: number,
     rootCount: number,
-    jsOnly: boolean,
     interval: number,
     isHighPrecision: boolean,
-    weightType: WeightType
+    weightType: WeightType,
+    implementationFilter: ImplementationFilter
   ) {
     this._categories = categories;
     this._callNodeTable = callNodeTable;
@@ -108,10 +109,10 @@ export class CallTree {
     this._rootCount = rootCount;
     this._displayDataByIndex = new Map();
     this._children = [];
-    this._jsOnly = jsOnly;
     this._interval = interval;
     this._isHighPrecision = isHighPrecision;
     this._weightType = weightType;
+    this._implementationFilter = implementationFilter;
   }
 
   getRoots() {
@@ -193,13 +194,29 @@ export class CallTree {
 
   getNodeData(callNodeIndex: IndexIntoCallNodeTable): CallNodeData {
     const funcIndex = this._callNodeTable.func[callNodeIndex];
-    const funcName = this._stringTable.getString(
-      this._funcTable.name[funcIndex]
-    );
+
     const total = this._callNodeSummary.total[callNodeIndex];
     const totalRelative = total / this._rootTotalSummary;
     const self = this._callNodeSummary.self[callNodeIndex];
     const selfRelative = self / this._rootTotalSummary;
+
+    const isJS = this._funcTable.isJS[funcIndex];
+    const relevantForJS = this._funcTable.relevantForJS[funcIndex];
+    const categoryIndex = this._callNodeTable.category[callNodeIndex];
+    const category = this._categories[categoryIndex];
+
+    let funcName;
+    if (this._implementationFilter === 'js' && !relevantForJS && !isJS) {
+      // For JS implementation filters, the frame labels aren't very
+      // interesting. Prefer the category. The tooltip will still show
+      // the full information.
+      const subCategoryIndex = this._callNodeTable.subcategory[callNodeIndex];
+      const subcategory = category.subcategories[subCategoryIndex];
+      // Don't use the subcategory if it's "Other".
+      funcName = subcategory === 'Other' ? category.name : subcategory;
+    } else {
+      funcName = this._stringTable.getString(this._funcTable.name[funcIndex]);
+    }
 
     return {
       funcName,
@@ -494,7 +511,7 @@ export function getCallTree(
   interval: Milliseconds,
   callNodeInfo: CallNodeInfo,
   categories: CategoryList,
-  implementationFilter: string,
+  implementationFilter: ImplementationFilter,
   callTreeCountsAndSummary: CallTreeCountsAndSummary,
   weightType: WeightType
 ): CallTree {
@@ -506,7 +523,6 @@ export function getCallTree(
       rootCount,
     } = callTreeCountsAndSummary;
 
-    const jsOnly = implementationFilter === 'js';
     // By default add a single decimal value, e.g 13.1, 0.3, 5234.4
     return new CallTree(
       thread,
@@ -516,10 +532,10 @@ export function getCallTree(
       callNodeChildCount,
       rootTotalSummary,
       rootCount,
-      jsOnly,
       interval,
       Boolean(thread.isJsTracer),
-      weightType
+      weightType,
+      implementationFilter
     );
   });
 }

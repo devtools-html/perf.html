@@ -952,13 +952,14 @@ export function toValidCallTreeSummaryStrategy(
 export function filterThreadByImplementation(
   thread: Thread,
   implementation: string,
+  categories: CategoryList,
   defaultCategory: IndexIntoCategoryList
 ): Thread {
-  const { funcTable, stringTable } = thread;
+  const { funcTable, frameTable, stringTable } = thread;
 
   switch (implementation) {
     case 'cpp':
-      return _filterThreadByFunc(
+      return _filterThreadByFuncAndFrame(
         thread,
         funcIndex => {
           // Return quickly if this is a JS frame.
@@ -979,24 +980,77 @@ export function filterThreadByImplementation(
         },
         defaultCategory
       );
-    case 'js':
-      return _filterThreadByFunc(
+    case 'js': {
+      // Note, -1 indexes in these cases will be fine, as it equates to "no matches".
+      const idleCategoryIndex = categories.findIndex(
+        category => category.name === 'Idle'
+      );
+      const otherCategoryIndex = categories.findIndex(
+        category => category.name === 'Other'
+      );
+
+      return _filterThreadByFuncAndFrame(
         thread,
-        funcIndex => {
-          return (
-            funcTable.isJS[funcIndex] || funcTable.relevantForJS[funcIndex]
-          );
+        (funcIndex, frameIndex) => {
+          if (
+            // This is clearly a JS frame, keep it.
+            funcTable.isJS[funcIndex] ||
+            // This function is relevant for JS.
+            funcTable.relevantForJS[funcIndex]
+          ) {
+            return true;
+          }
+          const categoryIndex = frameTable.category[frameIndex];
+          if (categoryIndex !== null) {
+            // This is a label frame.
+
+            // Idle and Other label frames and aren't interesting in the JS-context.
+            // The Idle frames appear midway through a stack, which is confusing. They also
+            // can't be filtered out with "drop function", as it would drop
+            // non-idle times.
+            //
+            // Given a (simplified) native stack from macOS:
+            //
+            // [Root (Other)------------------------------------]
+            // [GeckoNSApplication (Idle)-----------------------]
+            // [EventLoop------------------][mach_msg_trap------]
+            // [Work.js--------------------]
+            // [PresShell::DoFlush (Layout)]
+            //
+            // The JS-filtered view, with all label frames appears like this:
+            //
+            // [Other-------------------------------------------]
+            // [Idle--------------------------------------------]
+            // [Work.js--------------------]         ^
+            // [Layout---------------------]         |
+            //                                       This part is confusing, especially
+            //                                       in the flame graph.
+            //
+            // But removing the Other and Idle becomes much more interesting:
+            //
+            // [Work.js--------------------]
+            // [Layout---------------------]
+
+            return (
+              categoryIndex !== idleCategoryIndex &&
+              categoryIndex !== otherCategoryIndex
+            );
+          }
+
+          // Do not keep this stack.
+          return false;
         },
         defaultCategory
       );
+    }
     default:
       return thread;
   }
 }
 
-function _filterThreadByFunc(
+function _filterThreadByFuncAndFrame(
   thread: Thread,
-  filter: IndexIntoFuncTable => boolean,
+  filter: (IndexIntoFuncTable, IndexIntoFrameTable) => boolean,
   defaultCategory: IndexIntoCallNodeTable
 ): Thread {
   return timeCode('filterThread', () => {
@@ -1023,7 +1077,7 @@ function _filterThreadByFunc(
         const prefixNewStack = convertStack(stackTable.prefix[stackIndex]);
         const frameIndex = stackTable.frame[stackIndex];
         const funcIndex = frameTable.func[frameIndex];
-        if (filter(funcIndex)) {
+        if (filter(funcIndex, frameIndex)) {
           const prefixStackAndFrameIndex =
             (prefixNewStack === null ? -1 : prefixNewStack) * frameCount +
             frameIndex;
