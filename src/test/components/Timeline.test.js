@@ -5,7 +5,7 @@
 // @flow
 import * as React from 'react';
 import { Timeline } from '../../components/timeline';
-import { render } from '@testing-library/react';
+import { render, fireEvent } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { storeWithProfile } from '../fixtures/stores';
 import { getProfileFromTextSamples } from '../fixtures/profiles/processed-profile';
@@ -14,6 +14,7 @@ import { autoMockDomRect } from 'firefox-profiler/test/fixtures/mocks/domrect.js
 import mockRaf from '../fixtures/mocks/request-animation-frame';
 import {
   getBoundingBox,
+  getMouseEvent,
   fireFullClick,
   fireFullKeyPress,
   fireFullContextMenu,
@@ -31,6 +32,7 @@ import {
 import { ensureExists } from '../../utils/flow';
 
 import type { Profile } from 'firefox-profiler/types';
+import { getMouseTimePosition } from '../../selectors/profile';
 
 describe('Timeline multiple thread selection', function() {
   autoMockDomRect();
@@ -525,5 +527,118 @@ describe('Timeline', function() {
       fireFullClick(getByText('/ tracks visible'));
       expect(getRightClickedTrack(store.getState())).toEqual(null);
     });
+  });
+});
+
+describe('TimelineSelection', function() {
+  // Write a test to make sure the line actually changes positions.
+  const originalDOMRect = global.DOMRect;
+  beforeEach(() => {
+    global.DOMRect = class DOMRect {};
+  });
+  afterEach(() => {
+    if (originalDOMRect) {
+      global.DOMRect = originalDOMRect;
+    } else {
+      delete global.DOMRect;
+    }
+  });
+
+  const LEFT = 100;
+  const TOP = 250;
+
+  function setup(
+    profile: Profile = getProfileWithNiceTracks(),
+    component = <Timeline />
+  ) {
+    const store = storeWithProfile(profile);
+    const { getState, dispatch } = store;
+    const flushRafCalls = mockRaf();
+    const ctx = mockCanvasContext();
+    jest
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(() => ctx);
+    let leftOffset = LEFT;
+    let topOffset = TOP;
+    jest
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(() => {
+        const rect = getBoundingBox(300, 400);
+        // Add some arbitrary X offset.
+        rect.left += leftOffset;
+        rect.right += leftOffset;
+        rect.x += leftOffset;
+        rect.y += topOffset;
+        rect.top += topOffset;
+        rect.bottom += topOffset;
+        return rect;
+      });
+
+    const renderResult = render(<Provider store={store}>{component}</Provider>);
+    const { container } = renderResult;
+
+    // WithSize uses requestAnimationFrame
+    flushRafCalls();
+
+    function hoverLine() {
+      return ensureExists(
+        container.querySelector('.timelineSelectionHoverLine'),
+        `Couldn't find the vertical hover line, with selector .timelineSelectionHoverLine`
+      );
+    }
+
+    function timelineSelection() {
+      return ensureExists(
+        document.querySelector('.timelineSelection'),
+        `Couldn't find the timeline, with selector .timelineSelection`
+      );
+    }
+
+    function moveMouse(pageX: number) {
+      fireEvent(
+        timelineSelection(),
+        getMouseEvent('mousemove', { pageX, pageY: TOP })
+      );
+    }
+
+    function moveMouseAndGetLeft(pageX: number): number {
+      moveMouse(pageX);
+      return parseInt(hoverLine().style.left);
+    }
+
+    function moveMouseAndGetTop(pageX: number): number {
+      moveMouse(pageX);
+      return parseInt(hoverLine().style.top);
+    }
+
+    return {
+      ...renderResult,
+      dispatch,
+      getState,
+      thread: profile.threads[0],
+      store,
+      hoverLine,
+      timelineSelection,
+      moveMouse,
+      moveMouseAndGetLeft,
+      moveMouseAndGetTop,
+    };
+  }
+
+  it('checks if the vertical hover line changes position in the timeline area', () => {
+    const {
+      hoverLine,
+      timelineSelection,
+      getState,
+      moveMouse,
+      moveMouseAndGetLeft,
+    } = setup();
+
+    const profile = getProfileWithNiceTracks();
+    const store = storeWithProfile(profile);
+
+    console.log(hoverLine().style);
+    moveMouse(LEFT);
+    console.log(hoverLine().style);
   });
 });
