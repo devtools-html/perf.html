@@ -57,7 +57,10 @@ describe('timeline/TrackNetwork', function() {
     // Ensure we start out with 0.
     expect(getContextDrawCalls().length).toEqual(0);
 
-    // Send out the resize, and ensure we are drawing.
+    // Send out the resize with a width change, and ensure we are drawing.
+    HTMLElement.prototype.getBoundingClientRect.mockImplementation(() =>
+      getBoundingBox(GRAPH_WIDTH - 100, GRAPH_HEIGHT)
+    );
     window.dispatchEvent(new Event('resize'));
     expect(getContextDrawCalls().length > 0).toBe(true);
   });
