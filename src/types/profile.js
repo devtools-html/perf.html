@@ -754,6 +754,10 @@ export type ProfileMeta = {|
   // The sampleUnits property landed in Firefox 86, and is only optional because
   // older profile versions may not have it. No upgrader was written for this change.
   sampleUnits?: SampleUnits,
+  // Profile importers can optionally add information about where they are imported from.
+  // They also use the "product" field in the meta information, but this is somewhat
+  // ambiguous. This field, if present, is unambiguous that it was imported.
+  importedFrom?: string,
 |};
 
 /**
