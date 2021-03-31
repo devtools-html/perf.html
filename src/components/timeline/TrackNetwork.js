@@ -5,6 +5,9 @@
 // @flow
 
 import React, { PureComponent } from 'react';
+
+import { Tooltip } from 'firefox-profiler/components/tooltip/Tooltip';
+import { TooltipMarker } from 'firefox-profiler/components/tooltip/Marker';
 import { withSize } from 'firefox-profiler/components/shared/WithSize';
 import { VerticalIndicators } from './VerticalIndicators';
 
@@ -12,6 +15,7 @@ import {
   getCommittedRange,
   getZeroAt,
   getPageList,
+  getPreviewSelection,
 } from 'firefox-profiler/selectors/profile';
 import { getThreadSelectors } from 'firefox-profiler/selectors/per-thread';
 import {
@@ -203,6 +207,7 @@ type StateProps = {|
   +pages: PageList | null,
   +rangeStart: Milliseconds,
   +rangeEnd: Milliseconds,
+  +isModifyingSelection: boolean,
   +zeroAt: Milliseconds,
   +getMarker: MarkerIndex => Marker,
   +networkTiming: MarkerTiming[],
@@ -215,12 +220,18 @@ type Props = {|
 |};
 type State = {|
   +hoveredMarkerIndex: MarkerIndex | null,
+  +mouseX: CssPixels,
+  +mouseY: CssPixels,
 |};
 
 class Network extends PureComponent<Props, State> {
-  state = { hoveredMarkerIndex: null };
+  state = { hoveredMarkerIndex: null, mouseX: 0, mouseY: 0 };
 
-  _onHoveredMarkerChange = (hoveredMarkerIndex: MarkerIndex | null) => {
+  _onHoveredMarkerChange = (
+    hoveredMarkerIndex: MarkerIndex | null,
+    mouseX?: CssPixels,
+    mouseY?: CssPixels
+  ) => {
     if (hoveredMarkerIndex === null) {
       if (!window.persistTooltips) {
         // This persistTooltips property is part of the web console API. It helps
@@ -230,7 +241,7 @@ class Network extends PureComponent<Props, State> {
         });
       }
     } else {
-      this.setState({ hoveredMarkerIndex });
+      this.setState({ hoveredMarkerIndex, mouseX, mouseY });
     }
   };
 
@@ -243,9 +254,14 @@ class Network extends PureComponent<Props, State> {
       verticalMarkerIndexes,
       zeroAt,
       networkTiming,
+      isModifyingSelection,
+      threadIndex,
       width: containerWidth,
     } = this.props;
-    const { hoveredMarkerIndex } = this.state;
+    const { hoveredMarkerIndex, mouseX, mouseY } = this.state;
+    const hoveredMarker =
+      hoveredMarkerIndex === null ? null : getMarker(hoveredMarkerIndex);
+    const shouldShowTooltip = !isModifyingSelection;
 
     return (
       <div
@@ -271,6 +287,16 @@ class Network extends PureComponent<Props, State> {
           zeroAt={zeroAt}
           width={containerWidth}
         />
+        {shouldShowTooltip && hoveredMarkerIndex !== null && hoveredMarker ? (
+          <Tooltip mouseX={mouseX} mouseY={mouseY}>
+            <TooltipMarker
+              markerIndex={hoveredMarkerIndex}
+              marker={hoveredMarker}
+              threadsKey={threadIndex}
+              restrictHeightWidth={true}
+            />
+          </Tooltip>
+        ) : null}
       </div>
     );
   }
@@ -293,6 +319,7 @@ export const TrackNetwork = explicitConnect<
       rangeStart: start,
       rangeEnd: end,
       zeroAt: getZeroAt(state),
+      isModifyingSelection: getPreviewSelection(state).isModifying,
       verticalMarkerIndexes: selectors.getTimelineVerticalMarkerIndexes(state),
     };
   },
