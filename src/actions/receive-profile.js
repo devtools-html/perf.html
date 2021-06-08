@@ -13,6 +13,7 @@ import { SymbolStore } from 'firefox-profiler/profile-logic/symbol-store';
 import {
   symbolicateProfile,
   applySymbolicationStep,
+  StackMapper,
 } from 'firefox-profiler/profile-logic/symbolication';
 import * as MozillaSymbolicationAPI from 'firefox-profiler/profile-logic/mozilla-symbolication-api';
 import { mergeProfilesForDiffing } from 'firefox-profiler/profile-logic/merge-compare';
@@ -718,27 +719,29 @@ export function bulkProcessSymbolicationSteps(
 ): ThunkAction<void> {
   return (dispatch, getState) => {
     const { threads } = getProfile(getState());
-    const oldFuncToNewFuncMaps = new Map();
+    const oldFuncToNewFuncsMaps = new Map();
     const symbolicatedThreads = threads.map((oldThread, threadIndex) => {
       const symbolicationSteps = symbolicationStepsPerThread.get(threadIndex);
       if (symbolicationSteps === undefined) {
         return oldThread;
       }
-      const oldFuncToNewFuncMap = new Map();
+      const oldFuncToNewFuncsMap = new Map();
       let thread = oldThread;
+      const stackMapper = new StackMapper();
       for (const symbolicationStep of symbolicationSteps) {
         thread = applySymbolicationStep(
           thread,
           symbolicationStep,
-          oldFuncToNewFuncMap
+          oldFuncToNewFuncsMap,
+          stackMapper
         );
       }
-      oldFuncToNewFuncMaps.set(threadIndex, oldFuncToNewFuncMap);
-      return thread;
+      oldFuncToNewFuncsMaps.set(threadIndex, oldFuncToNewFuncsMap);
+      return stackMapper.applyToThread(thread);
     });
     dispatch({
       type: 'BULK_SYMBOLICATION',
-      oldFuncToNewFuncMaps,
+      oldFuncToNewFuncsMaps,
       symbolicatedThreads,
     });
   };
@@ -863,6 +866,37 @@ function getSymbolStore(
       return MozillaSymbolicationAPI.requestSymbols(
         requests,
         symbolServerUrl
+      ).map(async (libPromise, i) => {
+        try {
+          const result = libPromise;
+          dispatch(receivedSymbolTableReply(requests[i].lib));
+          return result;
+        } catch (error) {
+          dispatch(receivedSymbolTableReply(requests[i].lib));
+          throw error;
+        }
+      });
+    },
+    requestSymbolsFromAPI: requests => {
+      if (!geckoProfiler) {
+        throw new Error("There's no connection to the gecko profiler add-on.");
+      }
+      if (!geckoProfiler.queryAPI) {
+        throw new Error('queryAPI endpoint not available');
+      }
+      for (const { lib } of requests) {
+        dispatch(requestingSymbolTable(lib));
+      }
+      async function queryAPI(url, json) {
+        if (!geckoProfiler || !geckoProfiler.queryAPI) {
+          throw new Error('queryAPI endpoint not available');
+        }
+        return JSON.parse(await geckoProfiler.queryAPI(url, json));
+      }
+      return MozillaSymbolicationAPI.requestSymbols(
+        requests,
+        symbolServerUrl,
+        queryAPI
       ).map(async (libPromise, i) => {
         try {
           const result = libPromise;

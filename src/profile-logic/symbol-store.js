@@ -21,11 +21,24 @@ export type AddressResult = {|
   name: string,
   // The offset (in bytes) between the start of the function and the address.
   functionOffset: number,
+  // An optional inline callstack, ordered from inside to outside. The outermost
+  // function usually matches `name`.
+  inlineFrames?: Array<AddressInlineFrame>,
+|};
+
+type AddressInlineFrame = {|
+  functionName?: string,
+  fileName?: string,
+  lineNumber?: number,
 |};
 
 interface SymbolProvider {
   // Cheap, should be called first.
   requestSymbolsFromServer(
+    requests: LibSymbolicationRequest[]
+  ): Promise<Map<number, AddressResult>>[];
+
+  requestSymbolsFromAPI(
     requests: LibSymbolicationRequest[]
   ): Promise<Map<number, AddressResult>>[];
 
@@ -214,11 +227,12 @@ export class SymbolStore {
     successCb: (LibSymbolicationRequest, Map<number, AddressResult>) => void,
     errorCb: (LibSymbolicationRequest, Error) => void
   ): Promise<void> {
-    // For each library, we have three options to obtain symbol information for
+    // For each library, we have four options to obtain symbol information for
     // it. We try all options in order, advancing to the next option on failure.
     // Option 1: Symbol tables cached in the database, this._db.
     // Option 2: Obtain symbols from the symbol server.
-    // Option 3: Obtain symbol tables from the add-on.
+    // Option 3  Obtain symbols from the add-on via queryAPI.
+    // Option 4: Obtain symbol tables from the add-on via getSymbolTable.
 
     // Check requests for validity first.
     requests = requests.filter(request => {
@@ -320,7 +334,8 @@ export class SymbolStore {
 
     // Process the results from the symbolication API request, as they arrive.
     // For each library that was not successfully symbolicated, fall back to
-    // requesting a whole symbol table from the add-on. The add-on will attempt
+    // the add-on API.
+    // TODO document a whole symbol table from the add-on. The add-on will attempt
     // to dump symbols from the binary.
     await Promise.all(
       libraryPromises.map(async ({ request, resultsPromise }) => {
@@ -331,43 +346,58 @@ export class SymbolStore {
 
           // Did not throw, option 2 was successful!
           successCb(request, results);
-        } catch (error1) {
-          // The symbolication API did not have any symbols for this library,
+        } catch (errorOption2) {
+          // The symbol server did not have any symbols for this library,
           // or an error occurred when parsing the results. We want to continue
           // to search for symbol information from other sources in both cases.
           // We keep the error around so that we can report it if all avenues fail.
           const { lib, addresses } = request;
           try {
-            // Option 3: Request a symbol table from the add-on.
-            // This call will throw if the add-on cannot obtain the symbol table.
-            const symbolTable = await this._symbolProvider.requestSymbolTableFromAddon(
-              lib
-            );
+            // Option 3: Request symbols from the add-on.
+            // This call will throw if the add-on cannot obtain the symbol table, or
+            // if the Firefox version does not support the query API.
+            const resultsPromise = this._symbolProvider.requestSymbolsFromAPI([
+              request,
+            ])[0];
+            const results = await resultsPromise;
+            // console.log(results);
 
             // Did not throw, option 3 was successful!
-            successCb(
-              request,
-              readSymbolsFromSymbolTable(
-                addresses,
-                symbolTable,
-                demangleCallback
-              )
-            );
+            successCb(request, results);
+          } catch (errorOption3) {
+            try {
+              // Option 4: Request a symbol table from the add-on.
+              // This call will throw if the add-on cannot obtain the symbol table.
+              const symbolTable = await this._symbolProvider.requestSymbolTableFromAddon(
+                lib
+              );
 
-            // Store the symbol table in the database.
-            await this._storeSymbolTableInDB(lib, symbolTable);
-          } catch (error2) {
-            // None of the symbolication methods were successful.
-            // Call the error callback.
-            errorCb(
-              request,
-              new SymbolsNotFoundError(
-                `Could not obtain symbols for ${lib.debugName}/${lib.breakpadId}.`,
-                lib,
-                error1,
-                error2
-              )
-            );
+              // Did not throw, option 4 was successful!
+              successCb(
+                request,
+                readSymbolsFromSymbolTable(
+                  addresses,
+                  symbolTable,
+                  demangleCallback
+                )
+              );
+
+              // Store the symbol table in the database.
+              await this._storeSymbolTableInDB(lib, symbolTable);
+            } catch (errorOption4) {
+              // None of the symbolication methods were successful.
+              // Call the error callback.
+              errorCb(
+                request,
+                new SymbolsNotFoundError(
+                  `Could not obtain symbols for ${lib.debugName}/${lib.breakpadId}.`,
+                  lib,
+                  errorOption2,
+                  errorOption3,
+                  errorOption4
+                )
+              );
+            }
           }
         }
       })

@@ -14,6 +14,9 @@ import {
   getEmptyRawMarkerTable,
   getEmptyJsAllocationsTable,
   getEmptyUnbalancedNativeAllocationsTable,
+  getEmptyNativeSymbolTable,
+  getEmptyStackTable,
+  shallowCloneFrameTable,
 } from './data-structures';
 import { immutableUpdate, ensureExists, coerce } from '../utils/flow';
 import { attemptToUpgradeProcessedProfileThroughMutation } from './processed-profile-versioning';
@@ -27,6 +30,8 @@ import { PROCESSED_PROFILE_VERSION } from '../app-logic/constants';
 import {
   getFriendlyThreadName,
   getOrCreateURIResource,
+  gatherStackReferences,
+  replaceStackReferences,
 } from '../profile-logic/profile-data';
 import { convertJsTracerToThread } from '../profile-logic/js-tracer';
 
@@ -160,7 +165,10 @@ type ExtractionInfo = {
   libToResourceIndex: Map<Lib, IndexIntoResourceTable>,
   originToResourceIndex: Map<string, IndexIntoResourceTable>,
   libNameToResourceIndex: Map<IndexIntoStringTable, IndexIntoResourceTable>,
-  stringToNewFuncIndex: Map<string, IndexIntoFuncTable>,
+  stringToNewFuncIndexAndFrameAddress: Map<
+    string,
+    { funcIndex: IndexIntoFuncTable, frameAddress: Address | null }
+  >,
 };
 
 /**
@@ -172,12 +180,17 @@ type ExtractionInfo = {
  * locationStringIndexes array to a func from the returned FuncTable.
  */
 export function extractFuncsAndResourcesFromFrameLocations(
-  locationStringIndexes: IndexIntoStringTable[],
+  frameLocations: IndexIntoStringTable[],
   relevantForJSPerFrame: boolean[],
   stringTable: UniqueStringArray,
   libs: Lib[],
   extensions: ExtensionTable = getEmptyExtensions()
-): [FuncTable, ResourceTable, IndexIntoFuncTable[]] {
+): {
+  funcTable: FuncTable,
+  resourceTable: ResourceTable,
+  frameFuncs: IndexIntoFuncTable[],
+  frameAddresses: (Address | null)[],
+} {
   // Important! If the flow type for the FuncTable was changed, update all the functions
   // in this file that start with the word "extract".
   const funcTable = getEmptyFuncTable();
@@ -195,7 +208,7 @@ export function extractFuncsAndResourcesFromFrameLocations(
     libToResourceIndex: new Map(),
     originToResourceIndex: new Map(),
     libNameToResourceIndex: new Map(),
-    stringToNewFuncIndex: new Map(),
+    stringToNewFuncIndexAndFrameAddress: new Map(),
   };
 
   for (let i = 0; i < extensions.length; i++) {
@@ -204,48 +217,65 @@ export function extractFuncsAndResourcesFromFrameLocations(
 
   // Go through every frame location string, and deduce the function and resource
   // information by applying various string matching heuristics.
-  const locationFuncs = locationStringIndexes.map(
-    (locationIndex, frameIndex) => {
-      const locationString = stringTable.getString(locationIndex);
-      const relevantForJS = relevantForJSPerFrame[frameIndex];
-      let funcIndex = extractionInfo.stringToNewFuncIndex.get(locationString);
-      if (funcIndex !== undefined) {
-        // The location string was already processed.
-        return funcIndex;
-      }
+  const frameFuncs = [];
+  const frameAddresses = [];
+  for (let frameIndex = 0; frameIndex < frameLocations.length; frameIndex++) {
+    const locationIndex = frameLocations[frameIndex];
+    const locationString = stringTable.getString(locationIndex);
+    const relevantForJS = relevantForJSPerFrame[frameIndex];
+    const info = extractionInfo.stringToNewFuncIndexAndFrameAddress.get(
+      locationString
+    );
+    if (info !== undefined) {
+      // The location string was already processed.
+      const { funcIndex, frameAddress } = info;
+      frameFuncs.push(funcIndex);
+      frameAddresses.push(frameAddress);
+      continue;
+    }
 
-      // These nested `if` branches check for 3 cases for constructing function and
-      // resource information.
-      funcIndex = _extractUnsymbolicatedFunction(
-        extractionInfo,
-        locationString,
-        locationIndex
-      );
+    // These nested `if` branches check for 3 cases for constructing function and
+    // resource information.
+    let funcIndex = null;
+    let frameAddress = null;
+    const unsymbolicatedInfo = _extractUnsymbolicatedFunction(
+      extractionInfo,
+      locationString,
+      locationIndex
+    );
+    if (unsymbolicatedInfo !== null) {
+      funcIndex = unsymbolicatedInfo.funcIndex;
+      frameAddress = unsymbolicatedInfo.frameAddress;
+    } else {
+      funcIndex = _extractCppFunction(extractionInfo, locationString);
       if (funcIndex === null) {
-        funcIndex = _extractCppFunction(extractionInfo, locationString);
+        funcIndex = _extractJsFunction(extractionInfo, locationString);
         if (funcIndex === null) {
-          funcIndex = _extractJsFunction(extractionInfo, locationString);
-          if (funcIndex === null) {
-            funcIndex = _extractUnknownFunctionType(
-              extractionInfo,
-              locationIndex,
-              relevantForJS
-            );
-          }
+          funcIndex = _extractUnknownFunctionType(
+            extractionInfo,
+            locationIndex,
+            relevantForJS
+          );
         }
       }
-
-      // Cache the above results.
-      extractionInfo.stringToNewFuncIndex.set(locationString, funcIndex);
-      return funcIndex;
     }
-  );
 
-  return [
-    extractionInfo.funcTable,
-    extractionInfo.resourceTable,
-    locationFuncs,
-  ];
+    // Cache the above results.
+    extractionInfo.stringToNewFuncIndexAndFrameAddress.set(locationString, {
+      funcIndex,
+      frameAddress,
+    });
+
+    frameFuncs.push(funcIndex);
+    frameAddresses.push(frameAddress);
+  }
+
+  return {
+    funcTable: extractionInfo.funcTable,
+    resourceTable: extractionInfo.resourceTable,
+    frameFuncs,
+    frameAddresses,
+  };
 }
 
 /**
@@ -258,7 +288,7 @@ function _extractUnsymbolicatedFunction(
   extractionInfo: ExtractionInfo,
   locationString: string,
   locationIndex: IndexIntoStringTable
-): IndexIntoFuncTable | null {
+): { funcIndex: IndexIntoFuncTable, frameAddress: Address } | null {
   if (!locationString.startsWith('0x')) {
     return null;
   }
@@ -304,12 +334,11 @@ function _extractUnsymbolicatedFunction(
   funcTable.name[funcIndex] = locationIndex;
   funcTable.resource[funcIndex] = resourceIndex;
   funcTable.relevantForJS[funcIndex] = false;
-  funcTable.address[funcIndex] = addressRelativeToLib;
   funcTable.isJS[funcIndex] = false;
   funcTable.fileName[funcIndex] = null;
   funcTable.lineNumber[funcIndex] = null;
   funcTable.columnNumber[funcIndex] = null;
-  return funcIndex;
+  return { funcIndex, frameAddress: addressRelativeToLib };
 }
 
 /**
@@ -340,7 +369,7 @@ function _extractCppFunction(
   const {
     funcTable,
     stringTable,
-    stringToNewFuncIndex,
+    stringToNewFuncIndexAndFrameAddress,
     libNameToResourceIndex,
     resourceTable,
   } = extractionInfo;
@@ -349,10 +378,10 @@ function _extractCppFunction(
   const funcName = _cleanFunctionName(funcNameRaw);
   const funcNameIndex = stringTable.indexForString(funcName);
   const libraryNameStringIndex = stringTable.indexForString(libraryNameString);
-  const funcIndex = stringToNewFuncIndex.get(funcName);
-  if (funcIndex !== undefined) {
+  const info = stringToNewFuncIndexAndFrameAddress.get(funcName);
+  if (info !== undefined) {
     // Do not insert a new function.
-    return funcIndex;
+    return info.funcIndex;
   }
   let resourceIndex = libNameToResourceIndex.get(libraryNameStringIndex);
   if (resourceIndex === undefined) {
@@ -368,7 +397,6 @@ function _extractCppFunction(
   funcTable.name[newFuncIndex] = funcNameIndex;
   funcTable.resource[newFuncIndex] = resourceIndex;
   funcTable.relevantForJS[newFuncIndex] = false;
-  funcTable.address[newFuncIndex] = -1;
   funcTable.isJS[newFuncIndex] = false;
   funcTable.fileName[newFuncIndex] = null;
   funcTable.lineNumber[newFuncIndex] = null;
@@ -464,7 +492,6 @@ function _extractJsFunction(
   funcTable.name[funcIndex] = funcNameIndex;
   funcTable.resource[funcIndex] = resourceIndex;
   funcTable.relevantForJS[funcIndex] = false;
-  funcTable.address[funcIndex] = -1;
   funcTable.isJS[funcIndex] = true;
   funcTable.fileName[funcIndex] = fileName;
   funcTable.lineNumber[funcIndex] = lineNumber;
@@ -485,7 +512,6 @@ function _extractUnknownFunctionType(
   funcTable.name[index] = locationIndex;
   funcTable.resource[index] = -1;
   funcTable.relevantForJS[index] = relevantForJS;
-  funcTable.address[index] = -1;
   funcTable.isJS[index] = false;
   funcTable.fileName[index] = null;
   funcTable.lineNumber[index] = null;
@@ -499,13 +525,16 @@ function _extractUnknownFunctionType(
 function _processFrameTable(
   geckoFrameStruct: GeckoFrameStruct,
   funcTable: FuncTable,
-  frameFuncs: IndexIntoFuncTable[]
+  frameFuncs: IndexIntoFuncTable[],
+  frameAddresses: (Address | null)[]
 ): FrameTable {
   return {
-    address: frameFuncs.map(funcIndex => funcTable.address[funcIndex]),
+    address: frameAddresses.map(a => (a === null ? -1 : a)),
     category: geckoFrameStruct.category,
     subcategory: geckoFrameStruct.subcategory,
     func: frameFuncs,
+    nativeSymbol: Array(geckoFrameStruct.length).fill(null),
+    inlineDepth: Array(geckoFrameStruct.length).fill(0),
     innerWindowID: geckoFrameStruct.innerWindowID,
     implementation: geckoFrameStruct.implementation,
     line: geckoFrameStruct.line,
@@ -986,21 +1015,24 @@ function _processThread(
   const { categories, shutdownTime } = meta;
 
   const stringTable = new UniqueStringArray(thread.stringTable);
-  const [
+  const {
     funcTable,
     resourceTable,
     frameFuncs,
-  ] = extractFuncsAndResourcesFromFrameLocations(
+    frameAddresses,
+  } = extractFuncsAndResourcesFromFrameLocations(
     geckoFrameStruct.location,
     geckoFrameStruct.relevantForJS,
     stringTable,
     libs,
     extensions
   );
+  const nativeSymbols = getEmptyNativeSymbolTable();
   const frameTable: FrameTable = _processFrameTable(
     geckoFrameStruct,
     funcTable,
-    frameFuncs
+    frameFuncs,
+    frameAddresses
   );
   const stackTable = _processStackTable(
     geckoStackTable,
@@ -1028,6 +1060,7 @@ function _processThread(
     frameTable,
     funcTable,
     resourceTable,
+    nativeSymbols,
     stackTable,
     markers,
     stringTable,
@@ -1079,7 +1112,112 @@ function _processThread(
 
   processJsTracer();
 
-  return newThread;
+  return nudgeReturnAddresses(newThread);
+}
+
+function nudgeReturnAddresses(thread: Thread): Thread {
+  // Make a new stack table where 1 byte is subtracted from all return addresses,
+  // i.e. the addresses of alle frames that are used as stack prefixes.
+  // But not from the addresses of the top of the stack (instruction pointer).
+  // Frames that are used as both prefixes and as leaves need to be duplicated.
+  const { stackTable, frameTable } = thread;
+  const stackNodesUsedAsLeaves = Array.from(gatherStackReferences(thread));
+  stackNodesUsedAsLeaves.sort((a, b) => a - b);
+
+  const mapForLeafFrames = new Uint32Array(frameTable.length);
+  const framesUsedAsNativeLeaves = new Set();
+  for (let i = 0; i < stackNodesUsedAsLeaves.length; i++) {
+    const stack = stackNodesUsedAsLeaves[i];
+    const frame = stackTable.frame[stack];
+    const address = frameTable.address[frame];
+    if (address !== null) {
+      framesUsedAsNativeLeaves.add(frame);
+      mapForLeafFrames[frame] = frame;
+    }
+  }
+
+  const framesUsedAsReturnAddresses = new Map();
+  for (let i = 0; i < stackTable.length; i++) {
+    const prefix = stackTable.prefix[i];
+    if (prefix === null) {
+      continue;
+    }
+    const prefixFrame = stackTable.frame[prefix];
+    const prefixAddress = frameTable.address[prefixFrame];
+    if (prefixAddress !== null) {
+      framesUsedAsReturnAddresses.set(prefixFrame, prefixAddress);
+    }
+  }
+
+  if (
+    framesUsedAsNativeLeaves.size === 0 &&
+    framesUsedAsReturnAddresses.size === 0
+  ) {
+    return thread;
+  }
+
+  const newFrameTable = shallowCloneFrameTable(frameTable);
+  for (const [frame, address] of framesUsedAsReturnAddresses) {
+    if (framesUsedAsNativeLeaves.has(frame)) {
+      const leafFrameIndex = newFrameTable.length;
+      newFrameTable.address.push(address);
+      newFrameTable.category.push(frameTable.category[frame]);
+      newFrameTable.subcategory.push(frameTable.subcategory[frame]);
+      newFrameTable.func.push(frameTable.func[frame]);
+      newFrameTable.inlineDepth.push(frameTable.inlineDepth[frame]);
+      newFrameTable.nativeSymbol.push(frameTable.nativeSymbol[frame]);
+      newFrameTable.innerWindowID.push(frameTable.innerWindowID[frame]);
+      newFrameTable.implementation.push(frameTable.implementation[frame]);
+      newFrameTable.line.push(frameTable.line[frame]);
+      newFrameTable.column.push(frameTable.column[frame]);
+      newFrameTable.optimizations.push(frameTable.optimizations[frame]);
+      newFrameTable.length++;
+      mapForLeafFrames[frame] = leafFrameIndex;
+    }
+    // Subtract 1 byte from the return address.
+    newFrameTable.address[frame] = address - 1;
+  }
+
+  const newStackTable = getEmptyStackTable();
+  const mapForLeafStacks = new Uint32Array(stackTable.length);
+  const mapForPrefixStacks = new Uint32Array(stackTable.length);
+  for (let i = 0; i < stackTable.length; i++) {
+    const frame = stackTable.frame[i];
+    const category = stackTable.category[i];
+    const subcategory = stackTable.subcategory[i];
+    const prefix = stackTable.prefix[i];
+
+    const newPrefix = prefix === null ? null : mapForPrefixStacks[prefix];
+
+    // First, add a stack that can be used as a prefix for the other stacks.
+    const newStackIndex = newStackTable.length;
+    newStackTable.frame.push(frame);
+    newStackTable.category.push(category);
+    newStackTable.subcategory.push(subcategory);
+    newStackTable.prefix.push(newPrefix);
+    newStackTable.length++;
+    mapForPrefixStacks[i] = newStackIndex;
+
+    // Now add a stack node if this frame is used as a leaf frame.
+    if (framesUsedAsNativeLeaves.has(frame)) {
+      const leafFrame = mapForLeafFrames[frame];
+      const leafStackIndex = newStackTable.length;
+      newStackTable.frame.push(leafFrame);
+      newStackTable.category.push(category);
+      newStackTable.subcategory.push(subcategory);
+      newStackTable.prefix.push(newPrefix);
+      newStackTable.length++;
+      mapForLeafStacks[i] = leafStackIndex;
+    }
+  }
+
+  const newThread = {
+    ...thread,
+    frameTable: newFrameTable,
+    stackTable: newStackTable,
+  };
+
+  return replaceStackReferences(newThread, mapForLeafStacks);
 }
 
 /**

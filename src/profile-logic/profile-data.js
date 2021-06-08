@@ -42,6 +42,7 @@ import type {
   IndexIntoSamplesTable,
   IndexIntoStackTable,
   IndexIntoResourceTable,
+  IndexIntoNativeSymbolTable,
   ThreadIndex,
   Category,
   Counter,
@@ -66,6 +67,8 @@ import type {
   CallTreeSummaryStrategy,
   EventDelayInfo,
   ThreadsKey,
+  MarkerPayload,
+  CauseBacktrace,
 } from 'firefox-profiler/types';
 import type { UniqueStringArray } from 'firefox-profiler/utils/unique-string-array';
 
@@ -103,6 +106,9 @@ export function getCallNodeInfo(
     const subcategory: Array<IndexIntoSubcategoryListForCategory> = [];
     const innerWindowID: Array<InnerWindowID> = [];
     const depth: Array<number> = [];
+    const sourceFramesInlinedIntoSymbol: Array<
+      IndexIntoNativeSymbolTable | -1 | null
+    > = [];
     let length = 0;
 
     function addCallNode(
@@ -110,7 +116,8 @@ export function getCallNodeInfo(
       funcIndex: IndexIntoFuncTable,
       categoryIndex: IndexIntoCategoryList,
       subcategoryIndex: IndexIntoSubcategoryListForCategory,
-      windowID: InnerWindowID
+      windowID: InnerWindowID,
+      inlinedIntoSymbol: IndexIntoNativeSymbolTable | null
     ) {
       const index = length++;
       prefix[index] = prefixIndex;
@@ -118,6 +125,7 @@ export function getCallNodeInfo(
       category[index] = categoryIndex;
       subcategory[index] = subcategoryIndex;
       innerWindowID[index] = windowID;
+      sourceFramesInlinedIntoSymbol[index] = inlinedIntoSymbol;
       if (prefixIndex === -1) {
         depth[index] = 0;
       } else {
@@ -137,6 +145,10 @@ export function getCallNodeInfo(
       const categoryIndex = stackTable.category[stackIndex];
       const subcategoryIndex = stackTable.subcategory[stackIndex];
       const windowID = frameTable.innerWindowID[frameIndex] || 0;
+      const inlinedIntoSymbol =
+        frameTable.inlineDepth[frameIndex] > 0
+          ? frameTable.nativeSymbol[frameIndex]
+          : null;
       const funcIndex = frameTable.func[frameIndex];
       const prefixCallNodeAndFuncIndex = prefixCallNode * funcCount + funcIndex;
       let callNodeIndex = prefixCallNodeAndFuncToCallNodeMap.get(
@@ -149,19 +161,28 @@ export function getCallNodeInfo(
           funcIndex,
           categoryIndex,
           subcategoryIndex,
-          windowID
+          windowID,
+          inlinedIntoSymbol
         );
         prefixCallNodeAndFuncToCallNodeMap.set(
           prefixCallNodeAndFuncIndex,
           callNodeIndex
         );
-      } else if (category[callNodeIndex] !== categoryIndex) {
-        // Conflicting origin stack categories -> default category + subcategory.
-        category[callNodeIndex] = defaultCategory;
-        subcategory[callNodeIndex] = 0;
-      } else if (subcategory[callNodeIndex] !== subcategoryIndex) {
-        // Conflicting origin stack subcategories -> "Other" subcategory.
-        subcategory[callNodeIndex] = 0;
+      } else {
+        if (
+          sourceFramesInlinedIntoSymbol[callNodeIndex] !== inlinedIntoSymbol
+        ) {
+          // Conflicting inlining: -1.
+          sourceFramesInlinedIntoSymbol[callNodeIndex] = -1;
+        }
+        if (category[callNodeIndex] !== categoryIndex) {
+          // Conflicting origin stack categories -> default category + subcategory.
+          category[callNodeIndex] = defaultCategory;
+          subcategory[callNodeIndex] = 0;
+        } else if (subcategory[callNodeIndex] !== subcategoryIndex) {
+          // Conflicting origin stack subcategories -> "Other" subcategory.
+          subcategory[callNodeIndex] = 0;
+        }
       }
       stackIndexToCallNodeIndex[stackIndex] = callNodeIndex;
     }
@@ -172,6 +193,7 @@ export function getCallNodeInfo(
       category: new Int32Array(category),
       subcategory: new Int32Array(subcategory),
       innerWindowID: new Float64Array(innerWindowID),
+      sourceFramesInlinedIntoSymbol,
       depth,
       length,
     };
@@ -2136,14 +2158,6 @@ export function getOriginAnnotationForFunc(
   resourceTable: ResourceTable,
   stringTable: UniqueStringArray
 ): string {
-  const resourceIndex = funcTable.resource[funcIndex];
-  const resourceNameIndex = resourceTable.name[resourceIndex];
-
-  let origin;
-  if (resourceNameIndex !== undefined) {
-    origin = stringTable.getString(resourceNameIndex);
-  }
-
   const fileNameIndex = funcTable.fileName[funcIndex];
   let fileName;
   if (fileNameIndex !== null) {
@@ -2159,18 +2173,14 @@ export function getOriginAnnotationForFunc(
   }
 
   if (fileName) {
-    // If the origin string is just a URL prefix that's part of the
-    // filename, it doesn't add any useful information, so just return
-    // the filename. If it's something else (e.g., an extension or
-    // library name), prepend it to the filename.
-    if (origin && !fileName.startsWith(origin)) {
-      return `${origin}: ${fileName}`;
-    }
     return fileName;
   }
 
-  if (origin) {
-    return origin;
+  const resourceIndex = funcTable.resource[funcIndex];
+  const resourceNameIndex = resourceTable.name[resourceIndex];
+
+  if (resourceNameIndex !== undefined) {
+    return stringTable.getString(resourceNameIndex);
   }
 
   return '';
@@ -2653,6 +2663,121 @@ export function filterToRetainedAllocations(
   }
 
   return newNativeAllocations;
+}
+
+export function gatherStackReferences(
+  thread: Thread
+): Set<IndexIntoStackTable> {
+  const set = new Set();
+
+  const { samples, markers, jsAllocations, nativeAllocations } = thread;
+
+  // Samples
+  for (let i = 0; i < samples.length; i++) {
+    const stack = samples.stack[i];
+    if (stack !== null) {
+      set.add(stack);
+    }
+  }
+
+  // Markers
+  for (let i = 0; i < markers.length; i++) {
+    const data = markers.data[i];
+    if (data && data.cause) {
+      const stack = data.cause.stack;
+      if (stack !== null) {
+        set.add(stack);
+      }
+    }
+  }
+
+  // JS allocations
+  if (jsAllocations !== undefined) {
+    for (let i = 0; i < jsAllocations.length; i++) {
+      const stack = jsAllocations.stack[i];
+      if (stack !== null) {
+        set.add(stack);
+      }
+    }
+  }
+
+  // Native allocations
+  if (nativeAllocations !== undefined) {
+    for (let i = 0; i < nativeAllocations.length; i++) {
+      const stack = nativeAllocations.stack[i];
+      if (stack !== null) {
+        set.add(stack);
+      }
+    }
+  }
+
+  return set;
+}
+
+export function replaceStackReferences(
+  thread: Thread,
+  map: Uint32Array
+): Thread {
+  const {
+    samples: oldSamples,
+    markers: oldMarkers,
+    jsAllocations: oldJsAllocations,
+    nativeAllocations: oldNativeAllocations,
+  } = thread;
+
+  // Samples
+  const samples = {
+    ...oldSamples,
+    stack: oldSamples.stack.map(oldStackIndex =>
+      oldStackIndex === null ? null : map[oldStackIndex]
+    ),
+  };
+
+  // Markers
+  function replaceStackReferenceInPayload(
+    oldData: MarkerPayload
+  ): MarkerPayload {
+    if (oldData && 'cause' in oldData && oldData.cause) {
+      // Replace the cause with the right stack index.
+      // Flow is not happy about this.
+      const payload: MarkerPayload & { cause?: CauseBacktrace } = oldData;
+      const data: MarkerPayload & { cause?: CauseBacktrace } = ({
+        ...payload,
+      }: any);
+      const stack = map[oldData.cause.stack];
+      data.cause = { ...oldData.cause, stack };
+      return ((data: any): MarkerPayload);
+    }
+    return oldData;
+  }
+  const markers = {
+    ...oldMarkers,
+    data: oldMarkers.data.map(replaceStackReferenceInPayload),
+  };
+
+  // JS allocations
+  let jsAllocations;
+  if (oldJsAllocations !== undefined) {
+    jsAllocations = {
+      ...oldJsAllocations,
+      stack: oldJsAllocations.stack.map(oldStackIndex =>
+        oldStackIndex === null ? null : map[oldStackIndex]
+      ),
+    };
+  }
+
+  // Native allocations
+  let nativeAllocations;
+  if (oldNativeAllocations !== undefined) {
+    nativeAllocations = {
+      ...oldNativeAllocations,
+      stack: oldNativeAllocations.stack.map(oldStackIndex =>
+        oldStackIndex === null ? null : map[oldStackIndex]
+      ),
+    };
+  }
+
+  return { ...thread, samples, markers, jsAllocations, nativeAllocations };
 }
 
 /**
