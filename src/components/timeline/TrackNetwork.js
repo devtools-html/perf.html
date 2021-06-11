@@ -272,7 +272,7 @@ class Network extends PureComponent<Props, State> {
     }
   };
 
-  _onMouseDown = e => {
+  _onMouseDown = (e: SyntheticMouseEvent<>) => {
     if (e.button === 2) {
       this._onRightClick();
     }
@@ -281,7 +281,14 @@ class Network extends PureComponent<Props, State> {
   _onRightClick = () => {
     const { threadIndex, changeRightClickedMarker } = this.props;
     const { hoveredMarkerIndex } = this.state;
-    changeRightClickedMarker(threadIndex, hoveredMarkerIndex);
+    if (hoveredMarkerIndex !== null) {
+      changeRightClickedMarker(threadIndex, hoveredMarkerIndex);
+    }
+  };
+
+  _onVerticalIndicatorRightClick = (markerIndex: MarkerIndex) => {
+    const { threadIndex, changeRightClickedMarker } = this.props;
+    changeRightClickedMarker(threadIndex, markerIndex);
   };
 
   render() {
@@ -335,6 +342,7 @@ class Network extends PureComponent<Props, State> {
             rangeEnd={rangeEnd}
             zeroAt={zeroAt}
             width={containerWidth}
+            onRightClick={this._onVerticalIndicatorRightClick}
           />
           {shouldShowTooltip && hoveredMarkerIndex !== null && hoveredMarker ? (
             <Tooltip mouseX={mouseX} mouseY={mouseY}>
