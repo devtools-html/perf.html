@@ -77,13 +77,12 @@ exports[`timeline/LocalTrack with a network track matches the snapshot of the ne
         class="timelineTrackNetwork"
         style="height: 35px;"
       >
-        <canvas
-          class="timelineTrackNetworkCanvas"
-        />
         <div
-          class="timelineVerticalIndicators"
-          data-testid="vertical-indicators"
+          class="react-contextmenu-wrapper treeViewContextMenu"
         >
+          <canvas
+            class="timelineTrackNetworkCanvas"
+          />
           <div
             class="timelineVerticalIndicatorsLine"
             data-testid="vertical-indicator-line"

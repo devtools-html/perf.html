@@ -32,6 +32,109 @@ exports[`VerticalIndicators displays tooltips 1`] = `
 </div>
 `;
 
+exports[`timeline/TrackNetwork draws differently a request and displays a tooltip when hovered 1`] = `
+<div
+  class="tooltip"
+  data-testid="tooltip"
+  style="--tooltip-detail-max-width: 600px; left: 23px; top: 13px;"
+>
+  <div
+    class="tooltipMarker"
+    style="--tooltip-detail-max-width: 600px;"
+  >
+    <div
+      class="tooltipHeader"
+    >
+      <div
+        class="tooltipOneLine"
+      >
+        <div
+          class="tooltipTiming"
+        >
+          1ms
+        </div>
+        <div
+          class="tooltipTitle"
+        >
+          Load 0: https://mozilla.org
+        </div>
+      </div>
+    </div>
+    <div
+      class="tooltipDetails"
+    >
+      <div
+        class="tooltipLabel"
+      >
+        Status
+        :
+      </div>
+      Response received
+      <div
+        class="tooltipLabel"
+      >
+        URL
+        :
+      </div>
+      <span
+        class="tooltipNetworkUrl"
+      >
+        https://mozilla.org
+      </span>
+      <div
+        class="tooltipLabel"
+      >
+        Priority
+        :
+      </div>
+      Normal(0)
+      <div
+        class="tooltipLabel"
+      >
+        MIME type
+        :
+      </div>
+      <div
+        class="tooltipNetworkMimeType"
+      >
+        <span
+          class="tooltipNetworkMimeTypeSwatch colored-square network-color-html"
+          title="text/html"
+        />
+        text/html
+      </div>
+      <div
+        class="tooltipLabel"
+      >
+        Thread
+        :
+      </div>
+      Empty
+    </div>
+    <div
+      class="tooltipNetworkPhases network-color-html"
+    >
+      <div
+        class="tooltipLabel"
+      >
+        HTTP response
+        :
+      </div>
+      <div
+        aria-label="Starting at 0.000 milliseconds, duration is 1.0 milliseconds"
+      >
+        1.0ms
+      </div>
+      <div
+        aria-hidden="true"
+        class="tooltipNetworkPhase"
+        style="margin-left: 0%; margin-right: 0%; opacity: 1;"
+      />
+    </div>
+  </div>
+</div>
+`;
+
 exports[`timeline/TrackNetwork matches the 2d context snapshot 1`] = `
 Array [
   Array [
@@ -400,15 +503,14 @@ exports[`timeline/TrackNetwork matches the component snapshot 1`] = `
   class="timelineTrackNetwork"
   style="height: 35px;"
 >
-  <canvas
-    class="timelineTrackNetworkCanvas"
-    height="35"
-    width="0"
-  />
   <div
-    class="timelineVerticalIndicators"
-    data-testid="vertical-indicators"
+    class="react-contextmenu-wrapper treeViewContextMenu"
   >
+    <canvas
+      class="timelineTrackNetworkCanvas"
+      height="35"
+      width="0"
+    />
     <div
       class="timelineVerticalIndicatorsLine"
       data-testid="vertical-indicator-line"
