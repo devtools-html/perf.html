@@ -126,6 +126,26 @@ const selectedThreads: Reducer<Set<ThreadIndex> | null> = (
     case 'ISOLATE_PROCESS':
     case 'ISOLATE_PROCESS_MAIN_THREAD':
     case 'HIDE_GLOBAL_TRACK':
+    case 'HIDE_TRACK_BY_TYPE': {
+      // Need some help here!
+      const { globalIdsToHide, localIdsToHide } = action;
+      if (state === null) {
+        // Either there was no selected thread, or the thread indexes were not modified.
+        return state;
+      }
+      const newSelectedThreads = new Set();
+      for (const oldThreadIndex of state) {
+        if (!globalIdsToHide.includes(oldThreadIndex)) {
+          newSelectedThreads.add(oldThreadIndex);
+        }
+        for (const idsToHideforPid of localIdsToHide.values()) {
+          if (!idsToHideforPid.includes(oldThreadIndex)) {
+            newSelectedThreads.add(oldThreadIndex);
+          }
+        }
+      }
+      return newSelectedThreads;
+    }
     case 'HIDE_LOCAL_TRACK':
     case 'ISOLATE_LOCAL_TRACK':
     case 'TOGGLE_RESOURCES_PANEL':
@@ -344,6 +364,13 @@ const hiddenGlobalTracks: Reducer<Set<TrackIndex>> = (
       hiddenGlobalTracks.add(action.trackIndex);
       return hiddenGlobalTracks;
     }
+    case 'HIDE_TRACK_BY_TYPE': {
+      const hiddenGlobalTracks = new Set(state);
+      for (const id of action.globalIdsToHide) {
+        hiddenGlobalTracks.add(id);
+      }
+      return hiddenGlobalTracks;
+    }
     case 'SHOW_ALL_TRACKS':
       return new Set();
     case 'SHOW_GLOBAL_TRACK': {
@@ -372,6 +399,17 @@ const hiddenLocalTracksByPid: Reducer<Map<Pid, Set<TrackIndex>>> = (
       const hiddenLocalTracks = new Set(hiddenLocalTracksByPid.get(action.pid));
       hiddenLocalTracks.add(action.trackIndex);
       hiddenLocalTracksByPid.set(action.pid, hiddenLocalTracks);
+      return hiddenLocalTracksByPid;
+    }
+    case 'HIDE_TRACK_BY_TYPE': {
+      const hiddenLocalTracksByPid = new Map(state);
+      for (const [pid, idsToHideforPid] of action.localIdsToHide.entries()) {
+        const hiddenLocalTracks = new Set(hiddenLocalTracksByPid.get(pid));
+        for (const id of idsToHideforPid) {
+          hiddenLocalTracks.add(id);
+        }
+        hiddenLocalTracksByPid.set(pid, hiddenLocalTracks);
+      }
       return hiddenLocalTracksByPid;
     }
     case 'SHOW_ALL_TRACKS': {

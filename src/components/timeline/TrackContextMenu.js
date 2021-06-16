@@ -17,6 +17,7 @@ import {
   isolateProcessMainThread,
   isolateScreenshot,
   hideLocalTrack,
+  hideAllTracksByType,
   showLocalTrack,
 } from 'firefox-profiler/actions/profile-view';
 import explicitConnect from 'firefox-profiler/utils/connect';
@@ -71,6 +72,7 @@ type DispatchProps = {|
   +showGlobalTrack: typeof showGlobalTrack,
   +isolateProcess: typeof isolateProcess,
   +hideLocalTrack: typeof hideLocalTrack,
+  +hideAllTracksByType: typeof hideAllTracksByType,
   +showLocalTrack: typeof showLocalTrack,
   +isolateLocalTrack: typeof isolateLocalTrack,
   +isolateProcessMainThread: typeof isolateProcessMainThread,
@@ -83,6 +85,19 @@ class TimelineTrackContextMenuImpl extends PureComponent<Props> {
   _showAllTracks = (): void => {
     const { showAllTracks } = this.props;
     showAllTracks();
+  };
+
+  _getRightClickedTrackType = (): string => {
+    const { rightClickedTrack, localTracksByPid, globalTracks } = this.props;
+
+    const track =
+      rightClickedTrack.type === 'local'
+        ? localTracksByPid.get(rightClickedTrack.pid)[
+            rightClickedTrack.trackIndex
+          ]
+        : globalTracks[rightClickedTrack.trackIndex];
+
+    return track.type;
   };
 
   _toggleGlobalTrackVisibility = (
@@ -141,6 +156,18 @@ class TimelineTrackContextMenuImpl extends PureComponent<Props> {
         hideLocalTrack(pid, trackIndex);
       }
     }
+  };
+
+  _hideTracksByType = (_): void => {
+    const { hideAllTracksByType, rightClickedTrack } = this.props;
+    const type = this._getRightClickedTrackType();
+
+    if (rightClickedTrack === null) {
+      throw new Error(
+        'Attempted to isolate the process with no right clicked track.'
+      );
+    }
+    hideAllTracksByType(type);
   };
 
   _isolateProcess = () => {
@@ -561,6 +588,44 @@ class TimelineTrackContextMenuImpl extends PureComponent<Props> {
     );
   }
 
+  renderHideTrackByType() {
+    const { rightClickedTrack } = this.props;
+    if (rightClickedTrack === null) {
+      return null;
+    }
+
+    //When adding more allowed types, we need to take care that we can't enter one of the following cases:
+    //1. Hiding a global track that still has visible local tracks
+    //2. No more visible tracks
+    //3. One global track without any data is displayed
+    //(all its local track are hidden + it doesn't have any data itself)
+
+    const ALLOWED_TYPES = [
+      'screenshots',
+      'memory',
+      'network',
+      'ipc',
+      'event-delay',
+    ];
+
+    const type = this._getRightClickedTrackType();
+
+    if (ALLOWED_TYPES.includes(type)) {
+      return (
+        <MenuItem
+          key={rightClickedTrack.pid}
+          preventClose={false}
+          onClick={this._hideTracksByType}
+        >
+          <Localized id="TrackContextMenu--hide-track-by-type" vars={{ type }}>
+            <>Hide all tracks of type “{type}”</>
+          </Localized>
+        </MenuItem>
+      );
+    }
+    return null;
+  }
+
   renderShowAllTracks() {
     const { rightClickedTrack } = this.props;
     if (rightClickedTrack !== null) {
@@ -586,14 +651,17 @@ class TimelineTrackContextMenuImpl extends PureComponent<Props> {
 
   render() {
     const { globalTrackOrder, globalTracks, rightClickedTrack } = this.props;
+
     const isolateProcessMainThread = this.renderIsolateProcessMainThread();
     const isolateProcess = this.renderIsolateProcess();
     const isolateLocalTrack = this.renderIsolateLocalTrack();
     const isolateScreenshot = this.renderIsolateScreenshot();
     const hideTrack = this.renderHideTrack();
+    const hideTrackByType = this.renderHideTrackByType();
     const showAllTracksMenu = this.renderShowAllTracks();
     const separator =
       isolateProcessMainThread ||
+      hideTrackByType ||
       isolateProcess ||
       isolateLocalTrack ||
       isolateScreenshot ? (
@@ -615,6 +683,7 @@ class TimelineTrackContextMenuImpl extends PureComponent<Props> {
         {isolateLocalTrack}
         {isolateScreenshot}
         {hideTrack}
+        {hideTrackByType}
         {separator}
         {globalTrackOrder.map(globalTrackIndex => {
           const globalTrack = globalTracks[globalTrackIndex];
@@ -684,6 +753,7 @@ export const TimelineTrackContextMenu = explicitConnect<
     showAllTracks,
     showGlobalTrack,
     isolateProcess,
+    hideAllTracksByType,
     isolateLocalTrack,
     isolateProcessMainThread,
     isolateScreenshot,
