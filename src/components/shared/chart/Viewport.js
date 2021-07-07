@@ -228,10 +228,12 @@ export const withChartViewport: WithChartViewport<*, *> =
       _lastKeyboardNavigationFrame: number = 0;
       _keysDown: Set<NavigationKey> = new Set();
       _deltaToZoomFactor = delta => Math.pow(ZOOM_SPEED, delta);
+      _resizeObserver: ResizeObserver;
 
       constructor(props: ViewportProps) {
         super(props);
         this.state = this.getDefaultState(props);
+        this._resizeObserver = new ResizeObserver(this._setSize);
       }
 
       getHorizontalViewport(
@@ -768,20 +770,22 @@ export const withChartViewport: WithChartViewport<*, *> =
       };
 
       componentDidMount() {
-        window.addEventListener('resize', this._setSizeNextFrame, false);
         // The first _setSize ensures that the screen does not blip when mounting
         // the component, while the second ensures that it lays out correctly if the DOM
         // is not fully layed out correctly yet.
         this._setSize();
         this._setSizeNextFrame();
         if (this._container) {
-          this._container.addEventListener('wheel', this._mouseWheelListener, {
+          const container = this._container;
+          this._resizeObserver.observe(container);
+          container.addEventListener('wheel', this._mouseWheelListener, {
             passive: false,
           });
         }
       }
 
       componentWillUnmount() {
+        this._resizeObserver.disconnect();
         window.removeEventListener('resize', this._setSizeNextFrame, false);
         window.removeEventListener('mousemove', this._mouseMoveListener, true);
         window.removeEventListener('mouseup', this._mouseUpListener, true);

@@ -45,9 +45,15 @@ export function withSize<
   // See: https://github.com/firefox-devtools/profiler/issues/3062
   // eslint-disable-next-line flowtype/no-existential-type
   return class WithSizeWrapper extends React.PureComponent<*, State> {
+    _resizeObserver: ResizeObserver;
     _isSizeInfoDirty: boolean = false;
     state = { width: 0, height: 0 };
     _container: HTMLElement | null;
+
+    constructor(props) {
+      super(props);
+      this._resizeObserver = new ResizeObserver(this._resizeListener);
+    }
 
     componentDidMount() {
       const container = findDOMNode(this); // eslint-disable-line react/no-find-dom-node
@@ -55,7 +61,7 @@ export function withSize<
         throw new Error('Unable to find the DOMNode');
       }
       this._container = container;
-      window.addEventListener('resize', this._resizeListener);
+      this._resizeObserver.observe(container);
       window.addEventListener(
         'visibilitychange',
         this._visibilityChangeListener
@@ -99,12 +105,12 @@ export function withSize<
     };
 
     componentWillUnmount() {
-      this._container = null;
-      window.removeEventListener('resize', this._resizeListener);
+      this._resizeObserver.disconnect();
       window.removeEventListener(
         'visibilitychange',
         this._visibilityChangeListener
       );
+      this._container = null;
     }
 
     _updateWidth(container: HTMLElement) {
